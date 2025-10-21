@@ -1,39 +1,44 @@
-#ifndef ANGULARSERVER_H
-#define ANGULARSERVER_H
-#include <string>
-#include "RouterClient.hpp"
-#include "Simple-Web-Server/server_http.hpp"
+#pragma once
 
-using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
+#include <functional>
+#include <regex>
+#include <string>
+
+#include <boost/beast/http.hpp>
+
+#include "RouterClient.hpp"
+#include "server/http_server.hpp"
 
 class AngularServer {
-	private:
-		std::thread thr;
-		RouterClient &rc;
-		HttpServer	server;
-		SimpleWeb::CaseInsensitiveMultimap out_header;
-		void setSingleInHeader(const std::string &key, const std::string &val);
-	public:
-		AngularServer()=delete;
-		AngularServer(const AngularServer &val) = delete;
-		//AngularServer(RouterClient &routerClient, const int port);
-		AngularServer(RouterClient &routerClient, const int port,const std::function<void()>& afterStart = {});
-		/**
-		 * Destructor
-		 */
-		~AngularServer();
-		void stop();
-		void serveStatusGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		void serveConfigGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		void serveConfigPut(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		void serveApiGet(   std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		void serveStopGet(  std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		void serveResources(  std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		static void servePingGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req);
-		static bool endsWith(const std::string& str, const std::string& suffix)
-		{
-			    return str.size() >= suffix.size() && 0 == str.compare(str.size()-suffix.size(), suffix.size(), suffix);
-		};
-};
+public:
+    AngularServer() = delete;
+    AngularServer(const AngularServer&) = delete;
+    AngularServer& operator=(const AngularServer&) = delete;
 
-#endif /* ANGULARSERVER_H */
+    AngularServer(RouterClient& routerClient, int port, const std::function<void()>& afterStart = {});
+    ~AngularServer() = default;
+
+    void stop();
+
+private:
+    using Request = HttpServer::Request;
+    using Response = HttpServer::Response;
+    using HttpStatus = boost::beast::http::status;
+
+    Response handleRequest(Request&& request);
+    Response serveStatusGet(const Request& request);
+    Response serveConfigGet(const Request& request);
+    Response serveConfigPut(Request&& request);
+    Response serveConfigOptions(const Request& request);
+    Response serveApi(Request&& request);
+    Response serveStopGet(const Request& request);
+    Response serveResources(const Request& request);
+    static Response servePingGet(const Request& request);
+
+    static Response jsonResponse(const Request& request, std::string body, HttpStatus status = HttpStatus::ok);
+    static Response textResponse(const Request& request, std::string body, HttpStatus status = HttpStatus::ok, const std::string& contentType = "text/plain; charset=UTF-8", bool keepAlive = true);
+    static bool endsWith(const std::string& str, const std::string& suffix);
+
+    RouterClient& rc;
+    HttpServer server;
+};

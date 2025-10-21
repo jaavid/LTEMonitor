@@ -4,7 +4,8 @@ project(LTEMonitor)
 set (lte_monitor_VERSION_MAJOR 0)
 set (lte_monitor_VERSION_MINOR 18)
  
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #set(CMAKE_BUILD_TYPE Release)
 
@@ -13,10 +14,10 @@ if(NOT MSVC)
 else()
     add_compile_options(/W1)
 endif()
-SET(Boost_USE_STATIC_LIBS ON)
-add_subdirectory(Simple-Web-Server)
+set(Boost_USE_STATIC_LIBS OFF)
 
-find_package(Boost COMPONENTS log program_options REQUIRED)
+find_package(Boost COMPONENTS log program_options system REQUIRED)
+find_package(Threads REQUIRED)
 include_directories( ${Boost_INCLUDE_DIRS} ${PROJECT_BINARY_DIR})
 if(APPLE)
     set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl")
@@ -31,8 +32,9 @@ configure_file (
   "${PROJECT_BINARY_DIR}/Version.h"
 )
 
-add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp )
-target_link_libraries(LTEClasses INTERFACE simple-web-server ${Boost_LIBRARIES})
+add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp src/server/http_server.cpp)
+target_include_directories(LTEClasses PRIVATE src)
+target_link_libraries(LTEClasses PRIVATE ${Boost_LIBRARIES} Threads::Threads)
 add_executable(LTEMonitor main.cpp)
 
 target_link_libraries(LTEMonitor LTEClasses)
