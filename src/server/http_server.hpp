@@ -4,6 +4,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,8 +27,6 @@ public:
     boost::asio::strand<boost::asio::io_context::executor_type>& strand();
 
 private:
-    class Session;
-
     void do_accept();
     void handle_stop();
 
@@ -38,4 +37,5 @@ private:
     using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
     std::optional<WorkGuard> work_guard_;
     std::jthread io_thread_;
+    std::atomic<bool> stopping_{false};
 };

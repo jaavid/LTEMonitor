@@ -8,9 +8,9 @@ namespace {
 using tcp = boost::asio::ip::tcp;
 namespace http = boost::beast::http;
 
-class session : public std::enable_shared_from_this<session> {
+class Session : public std::enable_shared_from_this<Session> {
 public:
-    session(tcp::socket socket, HttpServer& server)
+    Session(tcp::socket socket, HttpServer& server)
         : stream_(std::move(socket)), server_(server) {}
 
     void run() { do_read(); }
@@ -142,7 +142,11 @@ HttpServer::~HttpServer() {
 }
 
 void HttpServer::stop() {
-    post([this]() { handle_stop(); });
+    bool expected = false;
+    if (stopping_.compare_exchange_strong(expected, true)) {
+        io_thread_.request_stop();
+        post([this]() { handle_stop(); });
+    }
 }
 
 void HttpServer::post(std::function<void()> fn) {
@@ -158,7 +162,7 @@ void HttpServer::do_accept() {
         boost::asio::make_strand(io_context_),
         [this](boost::system::error_code ec, tcp::socket socket) {
             if (!ec) {
-                std::make_shared<session>(std::move(socket), *this)->run();
+                std::make_shared<Session>(std::move(socket), *this)->run();
             }
             if (acceptor_.is_open()) {
                 do_accept();
@@ -174,5 +178,6 @@ void HttpServer::handle_stop() {
     boost::system::error_code ec;
     acceptor_.cancel(ec);
     acceptor_.close(ec);
+    io_context_.stop();
 }
 
