@@ -16,7 +16,7 @@ endif()
 SET(Boost_USE_STATIC_LIBS ON)
 add_subdirectory(Simple-Web-Server)
 
-find_package(Boost COMPONENTS log program_options REQUIRED)
+find_package(Boost COMPONENTS log program_options filesystem REQUIRED)
 include_directories( ${Boost_INCLUDE_DIRS} ${PROJECT_BINARY_DIR})
 if(APPLE)
     set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl")
@@ -31,7 +31,26 @@ configure_file (
   "${PROJECT_BINARY_DIR}/Version.h"
 )
 
+set(LTE_MONITOR_RESOURCE_DIR ${PROJECT_BINARY_DIR}/resources)
+if(EXISTS "${PROJECT_SOURCE_DIR}/lmgui/resources")
+    set(LTE_MONITOR_UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/lmgui/resources")
+elseif(EXISTS "${PROJECT_SOURCE_DIR}/ui_resources")
+    set(LTE_MONITOR_UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/ui_resources")
+else()
+    message(FATAL_ERROR "No UI resources directory found.")
+endif()
+
+add_custom_target(angular_ui_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${LTE_MONITOR_RESOURCE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${LTE_MONITOR_UI_SOURCE_DIR}
+            ${LTE_MONITOR_RESOURCE_DIR}
+    COMMENT "Copying Angular UI assets"
+)
+
 add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp )
+add_dependencies(LTEClasses angular_ui_assets)
+target_compile_definitions(LTEClasses PUBLIC ANGULAR_RESOURCE_DIR="${LTE_MONITOR_RESOURCE_DIR}")
 target_link_libraries(LTEClasses INTERFACE simple-web-server ${Boost_LIBRARIES})
 add_executable(LTEMonitor main.cpp)
 
@@ -40,28 +59,4 @@ target_link_libraries(LTEMonitor LTEClasses)
 enable_testing()
 add_subdirectory(tests)
 
-function(create_resources dir output)
-	# Create empty output file
-	file(WRITE ${output} "")
-	# Collect input files
-	file(GLOB bins ${dir}/*)
-	# Iterate through input files
-	foreach(bin ${bins})
-		# Get short filename
-		string(REGEX MATCH "([^/]+)$" filename ${bin})
-		set(nameOnly ${filename})
-		# Replace filename spaces & extension separator for C compatibility
-		string(REGEX REPLACE "\\.| |-" "_" filename ${filename})
-		# Read hex data from file
-		file(READ ${bin} filedata HEX)
-		# Convert hex data for C compatibility
-		string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," filedata ${filedata})
-		# Append data to output file
-		file(APPEND ${output} "const unsigned char x${filename}[] = {${filedata}};\nconst unsigned x${filename}_size = sizeof(x${filename});\n")
-		string(APPEND resmap "{ \"${nameOnly}\" , { x${filename}_size, x${filename}} },\n")
-	endforeach()
-	file(APPEND ${output} "std::map <std::string, std::pair <const unsigned,const unsigned char *> > ResourcesMap = {\n")
-	file(APPEND ${output} ${resmap})
-	file(APPEND ${output} "};\n")
-endfunction()
-create_resources("${PROJECT_SOURCE_DIR}/lmgui/dist/lmgui" AngularResources.h) 
+install(DIRECTORY ${LTE_MONITOR_RESOURCE_DIR}/ DESTINATION resources)

@@ -14,6 +14,7 @@ add_test(NAME HuaweiClient_test COMMAND HuaweiClient_test)
 
 add_executable(AngularServer_test AngularServer_test.cpp)
 #target_compile_definitions(AngularServer_test PUBLIC "-Wno-deprecated-declarations")
+target_compile_definitions(AngularServer_test PRIVATE LTE_MONITOR_TEST_RESOURCE_DIR="${LTE_MONITOR_RESOURCE_DIR}")
 target_link_libraries(AngularServer_test LTEClasses  simple-web-server ${Boost_LIBRARIES})
 add_test(NAME AngularServer_test COMMAND AngularServer_test)
 

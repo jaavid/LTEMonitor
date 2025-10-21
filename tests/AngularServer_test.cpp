@@ -8,6 +8,8 @@
 #include "Simple-Web-Server/server_http.hpp"
 #include "AngularServer.hpp"
 #include "HuaweiClient.hpp"
+#include <cstdlib>
+#include <string>
 
 using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
 using HttpClient = SimpleWeb::Client<SimpleWeb::HTTP>;
@@ -37,12 +39,66 @@ struct F{
 };
 
 struct G{
-		int port=8080;
-		HuaweiClient hc {"fakehost","fakeuser","fakepasswd"};
-		AngularServer as {hc,port};
-		HttpClient client {"localhost:8080"};
-		ptree pt;
-		~G(){ as.stop(); }
+                int port=8080;
+                HuaweiClient hc {"fakehost","fakeuser","fakepasswd"};
+                AngularServer as {hc,port};
+                HttpClient client {"localhost:8080"};
+                ptree pt;
+                ~G(){ as.stop(); }
+};
+
+struct EnvVarGuard {
+                std::string key;
+                std::string previous;
+                bool hasPrevious{false};
+
+                EnvVarGuard(const std::string &k, const std::string &value) : key(k) {
+#ifdef _WIN32
+                        char *existing = nullptr;
+                        size_t len = 0;
+                        if(_dupenv_s(&existing, &len, key.c_str()) == 0 && existing != nullptr){
+                                hasPrevious = true;
+                                previous.assign(existing, len ? len - 1 : 0);
+                                free(existing);
+                        }
+                        _putenv_s(key.c_str(), value.c_str());
+#else
+                        const char *existing = std::getenv(key.c_str());
+                        if(existing != nullptr){
+                                hasPrevious = true;
+                                previous = existing;
+                        }
+                        setenv(key.c_str(), value.c_str(), 1);
+#endif
+                }
+
+                ~EnvVarGuard(){
+#ifdef _WIN32
+                        if(hasPrevious){
+                                _putenv_s(key.c_str(), previous.c_str());
+                        } else {
+                                _putenv_s(key.c_str(), "");
+                        }
+#else
+                        if(hasPrevious){
+                                setenv(key.c_str(), previous.c_str(), 1);
+                        } else {
+                                unsetenv(key.c_str());
+                        }
+#endif
+                }
+};
+
+struct StaticContentFixture {
+                int port = 8081;
+                HuaweiClient hc{"fakehost","fakeuser","fakepasswd"};
+                EnvVarGuard guard{"LTE_MONITOR_RESOURCES", LTE_MONITOR_TEST_RESOURCE_DIR};
+                AngularServer as{hc, port};
+                HttpClient client{"localhost:8081"};
+
+                ~StaticContentFixture(){
+                        as.stop();
+                }
 };
 
 BOOST_FIXTURE_TEST_CASE( serving_functions , F ){
@@ -107,5 +163,25 @@ BOOST_FIXTURE_TEST_CASE( serving_data, G ) {
 	BOOST_CHECK_EQUAL(pt.get("config.user",""),"new-user");
 	BOOST_CHECK_EQUAL(pt.get("config.password",""),"new-password");
 
+}
+
+BOOST_FIXTURE_TEST_CASE( serves_static_assets_from_disk, StaticContentFixture ) {
+        auto r = client.request("GET", "/");
+        auto typeIt = r->header.find("Content-Type");
+        BOOST_REQUIRE(typeIt != r->header.end());
+        BOOST_CHECK_EQUAL(typeIt->second, "text/html; charset=UTF-8");
+
+        r = client.request("GET", "/styles.css");
+        typeIt = r->header.find("Content-Type");
+        BOOST_REQUIRE(typeIt != r->header.end());
+        BOOST_CHECK_EQUAL(typeIt->second, "text/css; charset=UTF-8");
+
+        r = client.request("GET", "/main.js");
+        typeIt = r->header.find("Content-Type");
+        BOOST_REQUIRE(typeIt != r->header.end());
+        BOOST_CHECK_EQUAL(typeIt->second, "application/javascript; charset=UTF-8");
+
+        r = client.request("GET", "/missing.js");
+        BOOST_CHECK_EQUAL(r->status_code, "404 Not Found");
 }
 
