@@ -1,161 +1,199 @@
 #include "AngularServer.hpp"
-#include "Version.h"
-#include "Simple-Web-Server/server_http.hpp"
-#include "Simple-Web-Server/status_code.hpp"
-#define BOOST_SPIRIT_THREADSAFE
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/property_tree/xml_parser.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/log/trivial.hpp>
-#include <sstream>
+
 #include "AngularResources.h"
+#include "Version.h"
 
-using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
-using namespace boost::property_tree;
+#include <boost/asio/steady_timer.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
+#include <boost/version.hpp>
 
-//------------------------------------- AngularServer
+#include <chrono>
+#include <sstream>
 
-AngularServer::AngularServer(RouterClient &routerClient, const int port,const std::function<void()>& afterStart) : rc(routerClient){
-	server.config.port = port;
+using boost::property_tree::ptree;
+namespace http = boost::beast::http;
 
-	//out_header.emplace("Access-Control-Allow-Origin","*");
-	server.resource["^/ping"]["GET"] = servePingGet;
-	server.resource["^/api/(.+)"]["GET"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/api/(.+)"]["PUT"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/api/(.+)"]["POST"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/api/(.+)"]["DELETE"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/config"]["GET"] = std::bind(&AngularServer::serveConfigGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/config"]["PUT"] = std::bind(&AngularServer::serveConfigPut, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/config"]["OPTIONS"] = std::bind(&AngularServer::serveConfigPut, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/status"]["GET"] = std::bind(&AngularServer::serveStatusGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/stop"]["GET"] = std::bind(&AngularServer::serveStopGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.default_resource["GET"] = std::bind(&AngularServer::serveResources, this, std::placeholders::_1, std::placeholders::_2);
-
-	thr=std::thread([this]() {
-			server.start();
-			});
-	std::this_thread::sleep_for(std::chrono::microseconds(100));
-
-	if(afterStart != NULL){	
-		afterStart();
-	}
+AngularServer::AngularServer(RouterClient& routerClient, int port, const std::function<void()>& afterStart)
+    : rc(routerClient),
+      server(static_cast<unsigned short>(port), [this](Request&& request) { return handleRequest(std::move(request)); }) {
+    if (afterStart) {
+        server.post(afterStart);
+    }
 }
 
-void AngularServer::setSingleInHeader(const std::string &key, const std::string &val){
-	auto it = out_header.find(key);
-	if(it != out_header.end()) it->second = val;	
-	else out_header.emplace(key, val);
-}	
-
-void AngularServer::stop(){
-	server.stop();
+void AngularServer::stop() {
+    server.stop();
 }
 
-void AngularServer::serveResources(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req ){
-	BOOST_LOG_TRIVIAL(info) << "sending resources [" << req->path << "] method " << req->method ;
-	std::string url = req->path.erase(0,1);
-	BOOST_LOG_TRIVIAL(info) << "url [" << url << "]";
-	if(url == "") url = "index.html";
-	if(url == "router") url = "index.html";
-	if(url == "console") url = "index.html";
-	if(url == "config") url = "index.html";
-	if(url == "signal") url = "index.html";
-	BOOST_LOG_TRIVIAL(info) << "url [" << url << "]";
-	auto found =  ResourcesMap.find(url);
-	if(found != ResourcesMap.end()){
-		/*
-		if(endsWith(req->path, ".js")) out_header.emplace("Content-Type","application/javascript; charset=UTF-8");
-		if(endsWith(req->path, ".png")) out_header.emplace("Content-Type","image/png; charset=UTF-8");
-		if(endsWith(req->path, ".css")) out_header.emplace("Content-Type","text/css");
-		if(endsWith(url, ".html")) out_header.emplace("Content-Type","text/html");
-		*/
-		if(endsWith(req->path, ".js")) setSingleInHeader("Content-Type","application/javascript; charset=UTF-8");
-		if(endsWith(req->path, ".png")) setSingleInHeader("Content-Type","image/png; charset=UTF-8");
-		if(endsWith(req->path, ".css")) setSingleInHeader("Content-Type","text/css");
-		if(endsWith(url, ".html")) setSingleInHeader("Content-Type","text/html");
-		BOOST_LOG_TRIVIAL(info) << "found:" << req->path;
-		std::string mystr(found->second.second, found->second.second + found->second.first);
-		res->write(SimpleWeb::StatusCode::success_ok,mystr,out_header);
-	} else {
-		BOOST_LOG_TRIVIAL(info) << "not found:" << req->path;
-		res->write(SimpleWeb::StatusCode::success_ok,out_header);
-	}
+AngularServer::Response AngularServer::handleRequest(Request&& request) {
+    const std::string target = request.target().to_string();
+    const auto method = request.method();
+
+    BOOST_LOG_TRIVIAL(info) << "incoming request [" << target << "] method " << request.method_string();
+
+    if (target == "/ping" && method == http::verb::get) {
+        return servePingGet(request);
+    }
+    if (target == "/status" && method == http::verb::get) {
+        return serveStatusGet(request);
+    }
+    if (target == "/config") {
+        if (method == http::verb::get) {
+            return serveConfigGet(request);
+        }
+        if (method == http::verb::put) {
+            return serveConfigPut(std::move(request));
+        }
+        if (method == http::verb::options) {
+            return serveConfigOptions(request);
+        }
+    }
+    static const std::regex apiRegex{"^/api/(.+)$"};
+    if (std::regex_match(target, apiRegex) &&
+        (method == http::verb::get || method == http::verb::put || method == http::verb::post || method == http::verb::delete_)) {
+        return serveApi(std::move(request));
+    }
+    if (target == "/stop" && method == http::verb::get) {
+        return serveStopGet(request);
+    }
+    if (method == http::verb::get) {
+        return serveResources(request);
+    }
+
+    return textResponse(request, "", HttpStatus::not_found, "text/plain; charset=UTF-8", request.keep_alive());
 }
 
-void AngularServer::serveStatusGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
-	BOOST_LOG_TRIVIAL(info) << "sending status ";
-	ptree tree;
-	tree.put("status.connected", rc.isConnected());
-	tree.put("status.loggedin", rc.isLoggedIn());
-	std::stringstream ss;
-	write_json(ss,tree);
-	setSingleInHeader("Content-Type","application/json; charset=UTF-8");
-	res->write(ss,out_header);
-}
-void AngularServer::serveConfigGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
-	BOOST_LOG_TRIVIAL(info) << "sending config ";
-	ptree tree;
-	tree.put("config.server", rc.getServer());
-	tree.put("config.user", rc.getUserName());
-	tree.put("config.password", rc.getPassword());
-	std::ostringstream av, bv;
-	av << lte_monitor_VERSION_MAJOR << "." << lte_monitor_VERSION_MINOR;
-	bv << BOOST_VERSION / 100000 << "." << BOOST_VERSION / 100 % 1000 << "." << BOOST_VERSION % 100;
-	tree.put("config.appVersion", av.str());
-	tree.put("config.boostVersion", bv.str());
-
-	std::stringstream ss;
-	write_json(ss,tree);
-	setSingleInHeader("Content-Type","application/json; charset=UTF-8");
-	res->write(ss,out_header);
+AngularServer::Response AngularServer::serveStatusGet(const Request& request) {
+    BOOST_LOG_TRIVIAL(info) << "sending status";
+    ptree tree;
+    tree.put("status.connected", rc.isConnected());
+    tree.put("status.loggedin", rc.isLoggedIn());
+    std::ostringstream ss;
+    write_json(ss, tree);
+    return jsonResponse(request, ss.str());
 }
 
-void AngularServer::serveConfigPut(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req){
-	BOOST_LOG_TRIVIAL(info) << "setting new config";
-	if(req->method == "OPTIONS"){
-		SimpleWeb::CaseInsensitiveMultimap head;
-		head.emplace("Access-Control-Allow-Methods","POST, GET, OPTIONS, PUT");
-		head.emplace("Access-Control-Allow-Origin","*");
-		head.emplace("Access-Control-Allow-Headers","Content-Type, Authorization, X-Requested-With");
-		res->write("",head);
-		return;
-	}
-	ptree tree, pt;
-	read_json(req->content, pt);
-	rc.login(pt.get<std::string>("config.server"),pt.get<std::string>("config.user"),pt.get<std::string>("config.password"));
-	tree.put("config.server", rc.getServer());
-	tree.put("config.user", rc.getUserName());
-	tree.put("config.password", rc.getPassword());
-	std::stringstream ss;
-	write_json(ss,tree);
-	setSingleInHeader("Content-Type","application/json; charset=UTF-8");
-	res->write(ss,out_header);
+AngularServer::Response AngularServer::serveConfigGet(const Request& request) {
+    BOOST_LOG_TRIVIAL(info) << "sending config";
+    ptree tree;
+    tree.put("config.server", rc.getServer());
+    tree.put("config.user", rc.getUserName());
+    tree.put("config.password", rc.getPassword());
+    std::ostringstream versionStream;
+    versionStream << lte_monitor_VERSION_MAJOR << "." << lte_monitor_VERSION_MINOR;
+    tree.put("config.appVersion", versionStream.str());
+    std::ostringstream boostVersionStream;
+    boostVersionStream << BOOST_VERSION / 100000 << "." << BOOST_VERSION / 100 % 1000 << "." << BOOST_VERSION % 100;
+    tree.put("config.boostVersion", boostVersionStream.str());
+
+    std::ostringstream ss;
+    write_json(ss, tree);
+    return jsonResponse(request, ss.str());
 }
 
-void AngularServer::servePingGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
-	BOOST_LOG_TRIVIAL(info) << "sending ping";
-	ptree pt;
-	pt.put("ping", "ok");
-	std::stringstream ss;
-	write_json(ss,pt);
-	res->write(ss);
+AngularServer::Response AngularServer::serveConfigPut(Request&& request) {
+    BOOST_LOG_TRIVIAL(info) << "setting new config";
+    ptree tree;
+    ptree body;
+    std::istringstream iss(request.body());
+    read_json(iss, body);
+    rc.login(body.get<std::string>("config.server"), body.get<std::string>("config.user"), body.get<std::string>("config.password"));
+    tree.put("config.server", rc.getServer());
+    tree.put("config.user", rc.getUserName());
+    tree.put("config.password", rc.getPassword());
+    std::ostringstream ss;
+    write_json(ss, tree);
+    return jsonResponse(request, ss.str());
 }
 
-void AngularServer::serveApiGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req){
-	//std::string mypath=req->path_match[1].str();
-	BOOST_LOG_TRIVIAL(info) << "sending api " << req->path ;
-	std::string  r = rc.Query(req->method, req->path, req->content.string());
-	setSingleInHeader("Content-Type","application/json; charset=UTF-8");
-	res->write(r,out_header);
+AngularServer::Response AngularServer::serveConfigOptions(const Request& request) {
+    BOOST_LOG_TRIVIAL(info) << "sending config options";
+    auto response = textResponse(request, "", HttpStatus::ok, "text/plain; charset=UTF-8", request.keep_alive());
+    response.set(http::field::access_control_allow_methods, "POST, GET, OPTIONS, PUT");
+    response.set(http::field::access_control_allow_origin, "*");
+    response.set(http::field::access_control_allow_headers, "Content-Type, Authorization, X-Requested-With");
+    return response;
 }
 
-void AngularServer::serveStopGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
-	BOOST_LOG_TRIVIAL(info) << "stopping" ;
-	res->write("stopping");
-	std::this_thread::sleep_for(std::chrono::microseconds(1000));
-	stop();
+AngularServer::Response AngularServer::serveApi(Request&& request) {
+    BOOST_LOG_TRIVIAL(info) << "sending api " << request.target();
+    const auto method = std::string(request.method_string());
+    const auto body = request.body();
+    const auto responseBody = rc.Query(method, request.target().to_string(), body);
+    return jsonResponse(request, responseBody);
 }
 
-AngularServer::~AngularServer(){
-	thr.join();
+AngularServer::Response AngularServer::serveStopGet(const Request& request) {
+    BOOST_LOG_TRIVIAL(info) << "stopping";
+    auto response = textResponse(request, "stopping", HttpStatus::ok, "text/plain; charset=UTF-8", false);
+    auto timer = std::make_shared<boost::asio::steady_timer>(server.strand(), std::chrono::milliseconds(50));
+    timer->async_wait([this, timer](const boost::system::error_code&) {
+        server.stop();
+    });
+    return response;
+}
+
+AngularServer::Response AngularServer::serveResources(const Request& request) {
+    const std::string originalTarget = request.target().to_string();
+    std::string url = originalTarget;
+    if (!url.empty() && url.front() == '/') {
+        url.erase(0, 1);
+    }
+    if (url.empty() || url == "router" || url == "console" || url == "config" || url == "signal") {
+        url = "index.html";
+    }
+    BOOST_LOG_TRIVIAL(info) << "sending resources [" << originalTarget << "] resolved to [" << url << "]";
+
+    auto found = ResourcesMap.find(url);
+    if (found == ResourcesMap.end()) {
+        return textResponse(request, "", HttpStatus::not_found, "text/plain; charset=UTF-8", request.keep_alive());
+    }
+
+    Response response{HttpStatus::ok, request.version()};
+    response.keep_alive(request.keep_alive());
+    if (endsWith(url, ".js")) {
+        response.set(http::field::content_type, "application/javascript; charset=UTF-8");
+    } else if (endsWith(url, ".png")) {
+        response.set(http::field::content_type, "image/png; charset=UTF-8");
+    } else if (endsWith(url, ".css")) {
+        response.set(http::field::content_type, "text/css");
+    } else if (endsWith(url, ".html")) {
+        response.set(http::field::content_type, "text/html; charset=UTF-8");
+    } else {
+        response.set(http::field::content_type, "application/octet-stream");
+    }
+
+    std::string body(found->second.second, found->second.second + found->second.first);
+    response.body() = std::move(body);
+    response.prepare_payload();
+    return response;
+}
+
+AngularServer::Response AngularServer::servePingGet(const Request& request) {
+    BOOST_LOG_TRIVIAL(info) << "sending ping";
+    ptree tree;
+    tree.put("ping", "ok");
+    std::ostringstream ss;
+    write_json(ss, tree);
+    return jsonResponse(request, ss.str());
+}
+
+AngularServer::Response AngularServer::jsonResponse(const Request& request, std::string body, HttpStatus status) {
+    return textResponse(request, std::move(body), status, "application/json; charset=UTF-8", request.keep_alive());
+}
+
+AngularServer::Response AngularServer::textResponse(const Request& request, std::string body, HttpStatus status, const std::string& contentType, bool keepAlive) {
+    Response response{status, request.version()};
+    response.keep_alive(keepAlive && request.keep_alive());
+    response.set(http::field::content_type, contentType);
+    response.body() = std::move(body);
+    response.prepare_payload();
+    return response;
+}
+
+bool AngularServer::endsWith(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
