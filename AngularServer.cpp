@@ -7,8 +7,14 @@
 #include <boost/property_tree/xml_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/log/trivial.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/system/error_code.hpp>
+#include <cstdlib>
+#include <fstream>
+#include <memory>
 #include <sstream>
-#include "AngularResources.h"
+#include <vector>
 
 using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
 using namespace boost::property_tree;
@@ -16,12 +22,43 @@ using namespace boost::property_tree;
 //------------------------------------- AngularServer
 
 AngularServer::AngularServer(RouterClient &routerClient, const int port,const std::function<void()>& afterStart) : rc(routerClient){
-	server.config.port = port;
+        server.config.port = port;
 
-	//out_header.emplace("Access-Control-Allow-Origin","*");
-	server.resource["^/ping"]["GET"] = servePingGet;
-	server.resource["^/api/(.+)"]["GET"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
-	server.resource["^/api/(.+)"]["PUT"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
+        const char *resourceOverride = std::getenv("LTE_MONITOR_RESOURCES");
+        std::vector<boost::filesystem::path> candidates;
+        if(resourceOverride != nullptr) {
+                candidates.emplace_back(resourceOverride);
+        }
+#ifdef ANGULAR_RESOURCE_DIR
+        candidates.emplace_back(ANGULAR_RESOURCE_DIR);
+#endif
+        candidates.emplace_back(boost::filesystem::current_path() / "resources");
+
+        for(const auto &candidate : candidates) {
+                if(candidate.empty()) {
+                        continue;
+                }
+                boost::system::error_code ec;
+                if(!boost::filesystem::exists(candidate, ec)) {
+                        continue;
+                }
+                auto canonicalPath = boost::filesystem::canonical(candidate, ec);
+                if(!ec && boost::filesystem::is_directory(canonicalPath)) {
+                        resourceRoot = canonicalPath;
+                        break;
+                }
+        }
+
+        if(resourceRoot.empty()) {
+                BOOST_LOG_TRIVIAL(warning) << "Angular resources directory not found";
+        } else {
+                BOOST_LOG_TRIVIAL(info) << "Angular resources directory: " << resourceRoot.string();
+        }
+
+        //out_header.emplace("Access-Control-Allow-Origin","*");
+        server.resource["^/ping"]["GET"] = servePingGet;
+        server.resource["^/api/(.+)"]["GET"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
+        server.resource["^/api/(.+)"]["PUT"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
 	server.resource["^/api/(.+)"]["POST"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
 	server.resource["^/api/(.+)"]["DELETE"] = std::bind(&AngularServer::serveApiGet, this, std::placeholders::_1, std::placeholders::_2);
 	server.resource["^/config"]["GET"] = std::bind(&AngularServer::serveConfigGet, this, std::placeholders::_1, std::placeholders::_2);
@@ -52,34 +89,38 @@ void AngularServer::stop(){
 }
 
 void AngularServer::serveResources(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req ){
-	BOOST_LOG_TRIVIAL(info) << "sending resources [" << req->path << "] method " << req->method ;
-	std::string url = req->path.erase(0,1);
-	BOOST_LOG_TRIVIAL(info) << "url [" << url << "]";
-	if(url == "") url = "index.html";
-	if(url == "router") url = "index.html";
-	if(url == "console") url = "index.html";
-	if(url == "config") url = "index.html";
-	if(url == "signal") url = "index.html";
-	BOOST_LOG_TRIVIAL(info) << "url [" << url << "]";
-	auto found =  ResourcesMap.find(url);
-	if(found != ResourcesMap.end()){
-		/*
-		if(endsWith(req->path, ".js")) out_header.emplace("Content-Type","application/javascript; charset=UTF-8");
-		if(endsWith(req->path, ".png")) out_header.emplace("Content-Type","image/png; charset=UTF-8");
-		if(endsWith(req->path, ".css")) out_header.emplace("Content-Type","text/css");
-		if(endsWith(url, ".html")) out_header.emplace("Content-Type","text/html");
-		*/
-		if(endsWith(req->path, ".js")) setSingleInHeader("Content-Type","application/javascript; charset=UTF-8");
-		if(endsWith(req->path, ".png")) setSingleInHeader("Content-Type","image/png; charset=UTF-8");
-		if(endsWith(req->path, ".css")) setSingleInHeader("Content-Type","text/css");
-		if(endsWith(url, ".html")) setSingleInHeader("Content-Type","text/html");
-		BOOST_LOG_TRIVIAL(info) << "found:" << req->path;
-		std::string mystr(found->second.second, found->second.second + found->second.first);
-		res->write(SimpleWeb::StatusCode::success_ok,mystr,out_header);
-	} else {
-		BOOST_LOG_TRIVIAL(info) << "not found:" << req->path;
-		res->write(SimpleWeb::StatusCode::success_ok,out_header);
-	}
+        BOOST_LOG_TRIVIAL(info) << "sending resources [" << req->path << "] method " << req->method ;
+        auto headers = out_header;
+        auto filePath = resolveResourcePath(req->path);
+
+        if(filePath.empty()){
+                BOOST_LOG_TRIVIAL(warning) << "resource not found: " << req->path;
+                headers.emplace("Content-Type", "text/plain; charset=UTF-8");
+                res->write(SimpleWeb::StatusCode::client_error_not_found, "Not Found", headers);
+                return;
+        }
+
+        auto stream = std::make_shared<std::ifstream>(filePath.string(), std::ios::binary);
+        if(!*stream){
+                BOOST_LOG_TRIVIAL(error) << "failed to open resource: " << filePath.string();
+                headers.emplace("Content-Type", "text/plain; charset=UTF-8");
+                res->write(SimpleWeb::StatusCode::server_error_internal_server_error, "Unable to read resource", headers);
+                return;
+        }
+
+        stream->seekg(0, std::ios::end);
+        auto length = stream->tellg();
+        stream->seekg(0, std::ios::beg);
+
+        auto mimeType = mimeTypeFromPath(filePath);
+        if(!mimeType.empty()){
+                headers.emplace("Content-Type", mimeType);
+        }
+        if(length >= 0){
+                headers.emplace("Content-Length", std::to_string(length));
+        }
+
+        res->write(SimpleWeb::StatusCode::success_ok, *stream, headers);
 }
 
 void AngularServer::serveStatusGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
@@ -157,5 +198,75 @@ void AngularServer::serveStopGet(std::shared_ptr<HttpServer::Response> res, std:
 }
 
 AngularServer::~AngularServer(){
-	thr.join();
+        thr.join();
+}
+
+boost::filesystem::path AngularServer::resolveResourcePath(const std::string &requestPath) const{
+        if(resourceRoot.empty()){
+                return {};
+        }
+
+        std::string relative = requestPath;
+        if(!relative.empty() && relative.front() == '/'){
+                relative.erase(0,1);
+        }
+        if(relative.empty()){
+                relative = "index.html";
+        }
+
+        if(relative.find("..") != std::string::npos){
+                BOOST_LOG_TRIVIAL(warning) << "attempt to access parent directory in path: " << requestPath;
+                return {};
+        }
+
+        auto candidate = resourceRoot / relative;
+        boost::system::error_code ec;
+        if(boost::filesystem::is_directory(candidate, ec)){
+                candidate /= "index.html";
+        }
+
+        if(boost::filesystem::exists(candidate, ec) && boost::filesystem::is_regular_file(candidate, ec)){
+                return candidate;
+        }
+
+        if(relative.find('.') == std::string::npos){
+                auto fallback = resourceRoot / "index.html";
+                if(boost::filesystem::exists(fallback, ec) && boost::filesystem::is_regular_file(fallback, ec)){
+                        return fallback;
+                }
+        }
+
+        return {};
+}
+
+std::string AngularServer::mimeTypeFromPath(const boost::filesystem::path &path){
+        auto ext = boost::algorithm::to_lower_copy(path.extension().string());
+        if(ext == ".html" || ext == ".htm"){
+                return "text/html; charset=UTF-8";
+        }
+        if(ext == ".css"){
+                return "text/css; charset=UTF-8";
+        }
+        if(ext == ".js"){
+                return "application/javascript; charset=UTF-8";
+        }
+        if(ext == ".json"){
+                return "application/json; charset=UTF-8";
+        }
+        if(ext == ".svg"){
+                return "image/svg+xml";
+        }
+        if(ext == ".png"){
+                return "image/png";
+        }
+        if(ext == ".jpg" || ext == ".jpeg"){
+                return "image/jpeg";
+        }
+        if(ext == ".ico"){
+                return "image/x-icon";
+        }
+        if(ext == ".txt"){
+                return "text/plain; charset=UTF-8";
+        }
+        return "application/octet-stream";
 }
