@@ -31,7 +31,8 @@ configure_file (
   "${PROJECT_BINARY_DIR}/Version.h"
 )
 
-add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp )
+add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp src/app/Application.cpp )
+target_include_directories(LTEClasses PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(LTEClasses INTERFACE simple-web-server ${Boost_LIBRARIES})
 add_executable(LTEMonitor main.cpp)
 

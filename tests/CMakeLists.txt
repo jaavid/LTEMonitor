@@ -17,3 +17,7 @@ add_executable(AngularServer_test AngularServer_test.cpp)
 target_link_libraries(AngularServer_test LTEClasses  simple-web-server ${Boost_LIBRARIES})
 add_test(NAME AngularServer_test COMMAND AngularServer_test)
 
+add_executable(Application_test Application_test.cpp)
+target_link_libraries(Application_test LTEClasses simple-web-server ${Boost_LIBRARIES})
+add_test(NAME Application_test COMMAND Application_test)
+
