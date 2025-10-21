@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <csignal>
 #include <functional>
 #include <future>
 #include <memory>
@@ -38,6 +39,7 @@ private:
     void restoreSignalHandlers();
     void installSignalHandlers();
     void waitForShutdown();
+    void processPendingSignal();
     void onSignal(int signal);
     bool performLogin();
     void launchBrowserIfNeeded();
@@ -54,6 +56,7 @@ private:
     void (*previousSigTerm_)(int) = nullptr;
 
     static std::atomic<Application *> activeApplication_;
+    static volatile std::sig_atomic_t pendingSignal_;
 };
 
 #endif // LTEMONITOR_APP_APPLICATION_HPP

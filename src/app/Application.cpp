@@ -1,5 +1,6 @@
 #include "Application.hpp"
 
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
@@ -21,6 +22,7 @@ private:
 }
 
 std::atomic<Application *> Application::activeApplication_{nullptr};
+volatile std::sig_atomic_t Application::pendingSignal_{0};
 
 Application::Application(ProgramOptions &options,
                          RouterClient &routerClient,
@@ -64,6 +66,7 @@ int Application::run() {
         return EXIT_FAILURE;
     }
 
+    processPendingSignal();
     if (shutdownRequested_.load()) {
         restoreSignalHandlers();
         return EXIT_SUCCESS;
@@ -71,6 +74,7 @@ int Application::run() {
 
     auto afterStart = [this]() { launchBrowserIfNeeded(); };
     server_ = serverFactory_(routerClient_, options_.port, afterStart);
+    processPendingSignal();
     if (shutdownRequested_.load()) {
         server_->stop();
     }
@@ -126,15 +130,23 @@ void Application::launchBrowserIfNeeded() {
 
 void Application::waitForShutdown() {
     std::unique_lock<std::mutex> lock(shutdownMutex_);
-    if (!shutdownRequested_.load()) {
-        shutdownCv_.wait(lock, [this]() { return shutdownRequested_.load(); });
+    while (!shutdownRequested_.load()) {
+        lock.unlock();
+        processPendingSignal();
+        lock.lock();
+        if (shutdownRequested_.load()) {
+            break;
+        }
+        shutdownCv_.wait_for(lock, std::chrono::milliseconds(50), [this]() {
+            return shutdownRequested_.load();
+        });
     }
 }
 
 void Application::handleSignal(int signal) {
     auto *app = activeApplication_.load();
     if (app) {
-        app->onSignal(signal);
+        pendingSignal_ = static_cast<std::sig_atomic_t>(signal);
     }
 }
 
@@ -143,6 +155,7 @@ void Application::onSignal(int) {
 }
 
 void Application::installSignalHandlers() {
+    pendingSignal_ = 0;
     activeApplication_.store(this);
     previousSigInt_ = std::signal(SIGINT, &Application::handleSignal);
     previousSigTerm_ = std::signal(SIGTERM, &Application::handleSignal);
@@ -161,5 +174,18 @@ void Application::restoreSignalHandlers() {
     }
     previousSigInt_ = nullptr;
     previousSigTerm_ = nullptr;
+    pendingSignal_ = 0;
     activeApplication_.store(nullptr);
+}
+
+void Application::processPendingSignal() {
+    if (activeApplication_.load() != this) {
+        return;
+    }
+
+    auto signal = pendingSignal_;
+    if (signal != 0) {
+        pendingSignal_ = 0;
+        onSignal(static_cast<int>(signal));
+    }
 }
