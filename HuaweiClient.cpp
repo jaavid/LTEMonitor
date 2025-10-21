@@ -30,10 +30,13 @@ std::string HuaweiAuth::getXmlWithToken(const std::string &token){
 }
 //------------------------------------- HuaweiClient
 void HuaweiClient::login(const std::string &srv,const std::string &user,const std::string &password){
-	server = srv;
-	cookie = "";
-	auth = HuaweiAuth(user,password);
-	login();
+        server = srv;
+        cookie = "";
+        credentials.setServer(srv);
+        credentials.setUser(user);
+        credentials.setPassword(password);
+        auth = HuaweiAuth(user,password);
+        login();
 }
 
 HuaweiClient::~HuaweiClient(){
@@ -43,9 +46,8 @@ void HuaweiClient::login(){
 	HttpClient client(server);
 	connected = false;
 	loggedIn = false;
-	try {
-		BOOST_LOG_TRIVIAL(info) << "Logging with pass: " << auth.password ;
-		auto r1 = client.request("GET", "/api/webserver/SesTokInfo");
+        try {
+                auto r1 = client.request("GET", "/api/webserver/SesTokInfo");
 		ptree pt;
 		read_xml(r1->content, pt, xml_parser::trim_whitespace);
 		std::string token = pt.get("response.TokInfo","");

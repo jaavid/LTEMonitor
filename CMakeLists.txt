@@ -17,7 +17,7 @@ SET(Boost_USE_STATIC_LIBS ON)
 add_subdirectory(Simple-Web-Server)
 
 find_package(Boost COMPONENTS log program_options REQUIRED)
-include_directories( ${Boost_INCLUDE_DIRS} ${PROJECT_BINARY_DIR})
+include_directories( ${Boost_INCLUDE_DIRS} ${PROJECT_BINARY_DIR} ${PROJECT_SOURCE_DIR}/src)
 if(APPLE)
     set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl")
 		find_package(OpenSSL)
@@ -31,7 +31,7 @@ configure_file (
   "${PROJECT_BINARY_DIR}/Version.h"
 )
 
-add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp )
+add_library(LTEClasses ProgramOptions.cpp HuaweiClient.cpp AngularServer.cpp src/security/credentials.cpp )
 target_link_libraries(LTEClasses INTERFACE simple-web-server ${Boost_LIBRARIES})
 add_executable(LTEMonitor main.cpp)
 

@@ -9,6 +9,7 @@
 #include <boost/log/trivial.hpp>
 #include <sstream>
 #include "AngularResources.h"
+#include "src/security/credentials.hpp"
 
 using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
 using namespace boost::property_tree;
@@ -97,7 +98,7 @@ void AngularServer::serveConfigGet(std::shared_ptr<HttpServer::Response> res, st
 	ptree tree;
 	tree.put("config.server", rc.getServer());
 	tree.put("config.user", rc.getUserName());
-	tree.put("config.password", rc.getPassword());
+        tree.put("config.password", rc.getPassword());
 	std::ostringstream av, bv;
 	av << lte_monitor_VERSION_MAJOR << "." << lte_monitor_VERSION_MINOR;
 	bv << BOOST_VERSION / 100000 << "." << BOOST_VERSION / 100 % 1000 << "." << BOOST_VERSION % 100;
@@ -121,15 +122,26 @@ void AngularServer::serveConfigPut(std::shared_ptr<HttpServer::Response> res, st
 		return;
 	}
 	ptree tree, pt;
-	read_json(req->content, pt);
-	rc.login(pt.get<std::string>("config.server"),pt.get<std::string>("config.user"),pt.get<std::string>("config.password"));
-	tree.put("config.server", rc.getServer());
-	tree.put("config.user", rc.getUserName());
-	tree.put("config.password", rc.getPassword());
-	std::stringstream ss;
-	write_json(ss,tree);
-	setSingleInHeader("Content-Type","application/json; charset=UTF-8");
-	res->write(ss,out_header);
+        read_json(req->content, pt);
+        auto passwordOpt = pt.get_optional<std::string>("config.password");
+        if(!passwordOpt || passwordOpt->empty() || security::Credentials::isMaskedValue(*passwordOpt)){
+                BOOST_LOG_TRIVIAL(warning) << "Rejected config update without password re-entry";
+                ptree errorTree;
+                errorTree.put("error","Router password must be provided when updating credentials.");
+                std::stringstream err;
+                write_json(err, errorTree);
+                setSingleInHeader("Content-Type","application/json; charset=UTF-8");
+                res->write(SimpleWeb::StatusCode::client_error_bad_request, err.str(), out_header);
+                return;
+        }
+        rc.login(pt.get<std::string>("config.server"),pt.get<std::string>("config.user"),*passwordOpt);
+        tree.put("config.server", rc.getServer());
+        tree.put("config.user", rc.getUserName());
+        tree.put("config.password", rc.getPassword());
+        std::stringstream ss;
+        write_json(ss,tree);
+        setSingleInHeader("Content-Type","application/json; charset=UTF-8");
+        res->write(ss,out_header);
 }
 
 void AngularServer::servePingGet(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> ){
