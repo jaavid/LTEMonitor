@@ -4,6 +4,7 @@
 #include "RouterClient.hpp"
 #include "Simple-Web-Server/server_http.hpp"
 #include <boost/filesystem/path.hpp>
+#include <thread>
 
 using HttpServer = SimpleWeb::Server<SimpleWeb::HTTP>;
 

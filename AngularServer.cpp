@@ -85,7 +85,10 @@ void AngularServer::setSingleInHeader(const std::string &key, const std::string 
 }	
 
 void AngularServer::stop(){
-	server.stop();
+        server.stop();
+        if(std::this_thread::get_id() != thr.get_id() && thr.joinable()){
+                thr.join();
+        }
 }
 
 void AngularServer::serveResources(std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req ){
@@ -198,7 +201,7 @@ void AngularServer::serveStopGet(std::shared_ptr<HttpServer::Response> res, std:
 }
 
 AngularServer::~AngularServer(){
-        thr.join();
+        stop();
 }
 
 boost::filesystem::path AngularServer::resolveResourcePath(const std::string &requestPath) const{
